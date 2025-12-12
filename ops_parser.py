@@ -1,6 +1,12 @@
 from typing import IO, Iterator
-from dap_parser import MiniwigglerClkOutIn, DapPayload, DapTelegram, DapTelegram19, DapTelegram2, DapTelegramReadReg, DapTelegram28, DapTelegramWriteReg, DapTelegramRead, DapTelegramWrite, parse_dap, parse_miniwiggler
-from mpsse_parser import MpsseGetGpioHigh, MpsseGetGpioLow, MpsseSendImmediate, MpsseSetGpioHigh, MpsseSetGpioLow, MpsseTransaction, MpsseSetTckDivisor, parse_mpsse
+from dap_parser import MiniwigglerClkOutIn, DapPayload, DapTelegram, \
+                       DapTelegram19, DapTelegram2, DapTelegramReadReg, \
+                       DapTelegram28, DapTelegramWriteReg, DapTelegramRead, \
+                       DapTelegramWrite, parse_dap, parse_miniwiggler
+from mpsse_parser import MpsseGetGpioHigh, MpsseGetGpioLow, \
+                         MpsseSendImmediate, MpsseSetGpioHigh, \
+                         MpsseSetGpioLow, MpsseTransaction, \
+                         MpsseSetTckDivisor, parse_mpsse
 from scapy_ftdi import FtdiXfer, iterate_ftdi_usb_capture
 
 
@@ -25,13 +31,15 @@ class DapOperationWriteMemory(DapOperation):
 
 
 class DapOperationReadMemory(DapOperation):
-    def __init__(self, time: float, addr: int, data: bytes):
+    def __init__(self, time: float, addr: int, data: bytes, crcgood: bool):
         DapOperation.__init__(self, time)
         self.addr = addr
         self.data = data
+        self.crcgood = crcgood
 
     def __repr__(self) -> str:
-        return f"*0x{self.addr:08x} ➡️ x'{self.data.hex(' ')}'"
+        return f"*0x{self.addr:08x} ➡️ x'{self.data.hex(' ')}'" + \
+            (" (crc bad)" if not self.crcgood else "")
 
 
 class DapOperationReadRegister(DapOperation):
@@ -199,10 +207,9 @@ def parse_dap_operations(cmds: Iterator[Cmd]) -> Iterator[Cmd | DapOperation]:
                         and isinstance(cmd1, DapTelegramWriteReg)
                         and cmd1.arg == 0xc10
                         and isinstance(cmd2, DapTelegramRead)
-                        and cmd2.crcgood
                         and cmd2.data is not None):
                     yield DapOperationReadMemory(
-                        u._raw.time, cmd2.read_addr, cmd2.data)
+                        u._raw.time, cmd2.read_addr, cmd2.data, cmd2.crcgood)
                     done = True
 
             if not done and len(cmdblock) == 6:
@@ -268,9 +275,8 @@ def parse_and_print(pcap: IO[bytes], fd=None) -> None:
     ops = parse_dap_operations(cmds)
 
     for u in ops:
-
         if isinstance(u, DapOperation):
-            print(f"{t:12.6f}s: {u}", file=fd)
+            print(f"{u.time:12.6f}s: {u}", file=fd)
         elif isinstance(u, MpsseSendImmediate):
             t = u._raw.time
             print(f"        % time is {t:.6f}s %", file=fd)
@@ -280,7 +286,7 @@ def parse_and_print(pcap: IO[bytes], fd=None) -> None:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Process Miniwiggler"\
+    parser = argparse.ArgumentParser(description="Process Miniwiggler"
                                      "USBpcap file, parsing DAP telegrams")
     parser.add_argument("pcap_file", help="Path to the USBpcap file")
     args = parser.parse_args()

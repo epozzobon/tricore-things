@@ -161,15 +161,14 @@ class DapTelegramRead(DapTelegram):
         self.rsp = out
 
         if len(out) >= self.read_size:
-            data = out[:self.read_size]
+            self.data = out[:self.read_size]
             if len(out) >= self.read_size + 4:
-                crc = binascii.crc32(data) ^ 0xFFFFFFFF
+                crc = binascii.crc32(self.data) ^ 0xFFFFFFFF
                 self.crc = int('{:032b}'.format(crc)[::-1], 2)
                 rxcrc = out[self.read_size:self.read_size + 4]
                 self.rxcrc, = struct.unpack('<I', rxcrc)
                 if self.rxcrc == self.crc:
                     self.crcgood = True
-                    self.data = data
 
     def __repr__(self) -> str:
         cmd = f"DapTelegramRead({hex(self.read_addr)}, "\
@@ -177,11 +176,11 @@ class DapTelegramRead(DapTelegram):
               + f" {self.arg & 3})"
         if self.crcgood and self.data is not None:
             return cmd + f" -> x'{self.data.hex()}' (crc good)"
-        if self.rsp is None:
-            return cmd
-        if self.rxcrc is None:
-            return cmd + f" -> x'{self.rsp.hex()}' (no crc)"
-        return cmd + f" -> x'{self.rsp.hex()}' (crc bad)"
+        if self.data is not None:
+            return cmd + f" -> x'{self.data.hex()}' (crc bad)"
+        if self.rsp is not None:
+            return cmd + f" -> x'{self.rsp.hex()}' (crc bad)"
+        return cmd
 
 
 class DapTelegramWrite(DapTelegram):
@@ -399,11 +398,10 @@ def parse_dap(capture: Iterator[FtdiXfer | MpsseTransaction
                             yield DapTelegram28(x)
                         else:
                             yield DapTelegram(x)
-                    except Exception as ex:
-                        raise ex
+                    except Exception:
+                        yield u
         else:
             yield u
-
 
 
 def parse_and_print(pcap: IO[bytes], fd=None) -> None:
@@ -423,8 +421,8 @@ def parse_and_print(pcap: IO[bytes], fd=None) -> None:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Process Miniwiggler "\
-                                     "USBpcap file, parsing DAP high-level "\
+    parser = argparse.ArgumentParser(description="Process Miniwiggler "
+                                     "USBpcap file, parsing DAP high-level "
                                      "operations")
     parser.add_argument("pcap_file", help="Path to the USBpcap file")
     args = parser.parse_args()

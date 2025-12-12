@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import binascii
 import struct
+import sys
+import types
 from typing import Callable, Optional, TypeVar, Any
 from pyftdi.ftdi import Ftdi
 from bitarray import bitarray
@@ -12,54 +14,85 @@ W = TypeVar('W')
 
 
 class Promise[T]:
+    class Unresolved:
+        pass
+
     def __init__(self) -> None:
-        self.__completed = False
-        self.__result: Optional[T] = None
+        self.__result: T | Promise.Unresolved = Promise.Unresolved()
         self.__callback: Optional[Callable[[T], None]] = None
 
     @property
     def value(self) -> T:
-        if self.__completed:
-            return self.__result
-        else:
-            raise Exception('Promise not ready yet')
+        if isinstance(self.__result, Promise.Unresolved):
+            raise Exception('Promise not resolved yet')
+        return self.__result
 
     @value.setter
     def value(self, value: T) -> None:
-        if self.__completed:
-            raise Exception('Promise was already satisfied')
+        if not isinstance(self.__result, Promise.Unresolved):
+            raise Exception('Promise was already resolved')
         self.__result = value
-        self.__completed = True
         if self.__callback is not None:
             self.__callback(self.__result)
 
-    def then(self, cb: Callable[[T], Any]) -> None:
-        self.__callback = cb
-        if self.__completed:
+    def then(self, cb: Callable[[T], W]) -> 'Promise[W]':
+        def on_resolve(t: T) -> None:
+            w = cb(t)
+            next_promise.value = w
+
+        next_promise = Promise[W]()
+        self.__callback = on_resolve
+        if not isinstance(self.__result, Promise.Unresolved):
             self.__callback(self.__result)
+        return next_promise
+
+
+def traceback() -> types.TracebackType | None:
+    tb = None
+    depth = 2
+    while True:
+        try:
+            frame = sys._getframe(depth)
+            depth += 1
+        except ValueError:
+            break
+        tb = types.TracebackType(tb, frame, frame.f_lasti, frame.f_lineno)
+    return tb
 
 
 def AssertInt(x: int) -> Callable[[None | int], None]:
     def curry(b: int | None) -> None:
-        assert b is not None
-        assert b == x, f"{hex(b)} != {hex(x)}"
+        if b is None or b != x:
+            raise AssertionError.with_traceback(AssertionError(
+                f"{hex(b) if b is not None else 'None'} != {hex(x)}"), tb)
+    tb = traceback()
     return curry
 
 
 def AssertNone() -> Callable[[Any], None]:
     def curry(b: Any) -> None:
-        assert b is None
+        if b is not None:
+            raise AssertionError.with_traceback(AssertionError(), tb)
+    tb = traceback()
     return curry
 
 
 def AssertBytes(x: str) -> Callable[[bytes], None]:
     def curry(b: bytes) -> None:
-        assert b == bytes.fromhex(x), f"{b.hex()} != {x}"
+        if b != bytes.fromhex(x):
+            raise AssertionError.with_traceback(AssertionError(
+                f"{b.hex()} != {x}"), tb)
+    tb = traceback()
     return curry
 
 
-def assert_zero(x: bytes) -> None:
-    assert sum(x) == 0, f"{x.hex()} != 0"
+def AssertZero() -> Callable[[bytes], None]:
+    def curry(x: bytes) -> None:
+        if sum(x) != 0:
+            raise AssertionError.with_traceback(AssertionError(
+                f"{x.hex()} != 0"), tb)
+    tb = traceback()
+    return curry
 
 
 def compute_crc6(msg: bitarray) -> int:
@@ -316,7 +349,7 @@ class DAPBatch:
         # 5 (4 bytes) -> reads 4 bytes from current selected address
         # 3 (4 bytes) -> identical to 5?
         # address for reads is set on telegram 8, low nibble 1
-        def on_response(b: bytes) -> None:
+        def on_response(b: bytes) -> int | None:
             ba = bitarray(b, endian='little')
             while len(ba) > 0 and ba[0] == 0:
                 ba = ba[1:]  # remove padding 0
@@ -328,12 +361,11 @@ class DAPBatch:
                 assert sum(b[size+1:]) == 0, b
                 crc = compute_crc6(bitarray(b[:size], endian='little'))
                 assert b[size] == crc, b
-                next_promise.value = rx
+                return rx
             else:
-                next_promise.value = None
+                return None
 
         assert 0 <= reg <= 0xf
-        next_promise = Promise[int | None]()
         if size == 2:
             reg |= 0x40
         elif size == 4:
@@ -342,49 +374,44 @@ class DAPBatch:
             reg |= 0x60
         else:
             raise NotImplementedError(f"Unknown size {size}")
-        self.dap_telegram(26, 7, reg, 9).then(on_response)
-        return next_promise
+        return self.dap_telegram(26, 7, reg, 9).then(on_response)
 
     def dap_t2(self, d: int) -> Promise[int | None]:
-        def on_response(b: bytes) -> None:
+        def on_response(b: bytes) -> int | None:
             if sum(b) == 0:
-                next_promise.value = None
+                return None
             else:
                 rx, = struct.unpack("<I", b[:4])
                 assert sum(b[4+1:]) == 0, b
                 crc = compute_crc6(bitarray(b[:4], endian='little'))
                 assert b[4] == crc, b
-                next_promise.value = rx
+                return rx
 
-        next_promise = Promise[int | None]()
-        self.dap_telegram(2, 32, d, 7).then(on_response)
-        return next_promise
+        return self.dap_telegram(2, 32, d, 7).then(on_response)
 
     def dap_t17(self, sz: int, data: int) -> Promise[int | None]:
-        def on_response(b: bytes) -> None:
+        def on_response(b: bytes) -> int | None:
             if sum(b) == 0:
-                next_promise.value = None
+                return None
             else:
                 rx, = struct.unpack("<H", b[:2])
                 assert sum(b[2+1:]) == 0, b
                 crc = compute_crc6(bitarray(b[:2], endian='little'))
                 assert b[2] == crc, b
-                next_promise.value = rx
+                return rx
 
-        next_promise = Promise[int | None]()
-        self.dap_telegram(17, sz, data, 5).then(on_response)
-        return next_promise
+        return self.dap_telegram(17, sz, data, 5).then(on_response)
 
     def dap_t19(self) -> None:
         self.dap_telegram(19, 8, 4, 3).then(AssertBytes('000002'))
 
     def dap_t28(self, x: int) -> None:
-        self.dap_telegram(28, 3, x, 3).then(assert_zero)
+        self.dap_telegram(28, 3, x, 3).then(AssertZero())
 
     def dap_writereg(self, reg: int, data: int, size: int, rspsize: int = 7
                      ) -> None:
         self.dap_telegram(8, size+4, data << 4 | reg, rspsize
-                          ).then(assert_zero)
+                          ).then(AssertZero())
 
     def dap_t8_0(self, x: int) -> None:
         self.dap_writereg(0, x, 12)
@@ -402,10 +429,11 @@ class DAPBatch:
         assert (size & 0x3fc) == size or size == 0x400
         assert (addr & 0xfffffffc) == addr
         self.dap_telegram(
-            9, 40, (addr & 0xfffffffc) << 8 | (size & 0x3fc), 7).then(assert_zero)
+            9, 40, (addr & 0xfffffffc) << 8 | (size & 0x3fc), 7).then(
+                    AssertZero())
 
     def dap_readmem(self, addr: int, size: int) -> Promise[bytes]:
-        def fn(b: bytes) -> None:
+        def fn(b: bytes) -> bytes:
             out = b''
             ba = bitarray(b, endian='little')
             for _ in range((size + 7) // 4):
@@ -421,21 +449,19 @@ class DAPBatch:
             if len(out) > 4:
                 rxcrc, = struct.unpack('<I', out[-4:])
                 assert rxcrc == crc
-            next_promise.value = data
-            return
-        next_promise = Promise[bytes]()
+            return data
+
         assert 0 < size <= 0x400
         assert (size & 3) == 0
         assert (addr & 0xfffffffc) == addr
         RESULT_SIZES = {4: 16, 8: 22, 12: 26, 64: 140, 1024: 1226}
         if size not in RESULT_SIZES:
             raise NotImplementedError()
-        self.dap_telegram(
+        return self.dap_telegram(
             10, 40,
             (addr & 0xfffffffc) << 8 | (size & 0x3fc) | 1,
             RESULT_SIZES[size]
             ).then(fn)
-        return next_promise
 
 
 class DAPOperations:

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 import random
 import struct
-import time
 import pyftdi.ftdi
 from pyftdi.ftdi import Ftdi
 
 from ftdi_dap import (
-    AssertInt, DAPBatch, AssertBytes, DAPOperations, MiniWigglerBatch, assert_zero, AssertNone
+    DAPBatch, DAPOperations, MiniWigglerBatch,
+    AssertNone, AssertBytes, AssertInt
 )
 
 
@@ -120,8 +120,8 @@ def main() -> None:
     BASE_ADDR = 0x7000002c
 
     if RUN_SELF_TEST:
-        # Self-test that writes and reads back the RAM to make sure all read/write
-        # implementations are actually working:
+        # Self-test that writes and reads back the RAM to make sure all
+        # read/write implementations are actually working:
         ref = random.randbytes(0x400)
         ops.write(BASE_ADDR, ref)
         readback = ops.read(BASE_ADDR, 0x400)
@@ -172,7 +172,8 @@ def main() -> None:
     print(hex(ops.read32(0xf88dfe08)))
 
     # For demo on stage, this code replaces the logo in RAM
-    import zlib, base64
+    import zlib
+    import base64
     logo = zlib.decompress(base64.decodebytes(
         b'eJytlVty0zAUhhtZx7JiJ07SJDwALdMn2ADXcllAYQVAWQB7YB3cpsMwrFP9z5EtK/Kl'
         b'ZeBBo3P5P0mWj6Qvbqb+OKVOXaZ+O63uO1K/0E7QrtAeIHaFRtDt0Qj2T/EztUXTja+h'

@@ -152,7 +152,6 @@ def parse_mpsse(fd: Iterator[FtdiXfer]) -> \
             yield u
 
 
-
 def parse_and_print(pcap: IO[bytes], fd=None) -> None:
     from scapy_ftdi import iterate_ftdi_usb_capture
     pkts = iterate_ftdi_usb_capture(pcap)
@@ -168,7 +167,7 @@ def parse_and_print(pcap: IO[bytes], fd=None) -> None:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Process Miniwiggler"\
+    parser = argparse.ArgumentParser(description="Process Miniwiggler"
                                      "USBpcap file, parsing DAP telegrams")
     parser.add_argument("pcap_file", help="Path to the USBpcap file")
     args = parser.parse_args()
