@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 import binascii
 import struct
 import sys
@@ -226,13 +226,13 @@ class MiniWigglerBatch(DAPInterface):
     # 0x0004  ADBUS2 (TDO) <---> U306_A, U304_Y
     # 0x0008  ADBUS3 (TMS) <---> TMS
     # 0x0010  ADBUS4       <---> U303_OE
-    # 0x0020  ADBUS5       <---> 
+    # 0x0020  ADBUS5       <--->
     # 0x0040  ADBUS6       <---> USR0
     # 0x0080  ADBUS7       <---> D301
 
     # high byte
     # (possible values: 12f2, 57f7, 67f7, 55f7)
-    # 0x0100  ACBUS0 <---> 
+    # 0x0100  ACBUS0 <--->
     # 0x0200  ACBUS1 <---> RESET
     # 0x0400  ACBUS2 <---> TRST
     # 0x0800  ACBUS3 <---> U307_A
@@ -297,7 +297,7 @@ class TigardBatch(DAPInterface):
     # 0x0008  BDBUS3 (TMS) ----> TMS
     # 0x0010  BDBUS4       ----> TRST
     # 0x0020  BDBUS5       ----> SRST
-    # 0x0040  BDBUS6       <---- 
+    # 0x0040  BDBUS6       <----
     # 0x0080  BDBUS7       <---- SRST
 
     def __init__(self, ftdi: Ftdi) -> None:
