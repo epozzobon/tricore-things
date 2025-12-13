@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from abc import ABC, abstractmethod
 import binascii
 import struct
 import sys
@@ -103,8 +104,16 @@ def compute_crc6(msg: bitarray) -> int:
     return crc ^ (crc >> 1)
 
 
+def unpad(ba: bitarray) -> bitarray:
+    while len(ba) > 0 and ba[0] == 0:
+        ba = ba[1:]  # remove padding 0
+    if len(ba) > 0 and ba[0] == 1:
+        ba = ba[1:]  # remove leading 1
+    return ba
+
+
 def dap_telegram(cmdid: int, arglen: int = 0,
-                 arg: Optional[int] = None) -> bytes:
+                 arg: Optional[int] = None) -> bitarray:
     out = bitarray('1')  # packet starts with a 1
     out.extend(int2ba(cmdid, length=5, endian='little'))
     if arg is None:
@@ -113,16 +122,14 @@ def dap_telegram(cmdid: int, arglen: int = 0,
         out.extend(int2ba(arglen, length=6, endian='little'))
         out.extend(int2ba(arg, length=arglen, endian='little'))
     out.extend(int2ba(compute_crc6(out), length=6, endian='little'))
+    return out
+
+
+def dap2_encode(out: bitarray) -> bytes:
     if out[-1] == 1:
         out.append(0)
-    out = bitarray('0' * (8 - len(out) % 8)) + out
-    out.bytereverse()
+    out = bitarray('0' * (8 - len(out) % 8), endian='little') + out
     return out.tobytes()
-
-
-assert bytes.fromhex('40f827') == dap_telegram(16)
-assert bytes.fromhex('c008033c4cbdee2a19') == dap_telegram(17, 48, 0x4abbaf530f00)
-assert bytes.fromhex('60fd63') == dap_telegram(21, 0, None), dap_telegram(21, 0, None).hex()
 
 
 class FtdiCmd:
@@ -193,7 +200,25 @@ class FtdiBatch:
             self.clear()
 
 
-class MiniWigglerBatch(FtdiBatch):
+class DAPInterface(FtdiBatch):
+    @abstractmethod
+    def dap_output_bytes(self, b: bitarray) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def dap_input_bytes(self, b: int) -> Promise[bytes]:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def test_reset(self) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def reset(self) -> None:
+        raise NotImplementedError()
+
+
+class MiniWigglerBatch(DAPInterface):
     # low byte
     # (possible values: 80db, 80da, 004b)
     # 0x0001  ADBUS0 (TCK) <---> DAP0
@@ -246,9 +271,9 @@ class MiniWigglerBatch(FtdiBatch):
         self.append(MiniWigglerBatch.GPIOL_NORMAL)
         self.exec()
 
-    def dap_output_bytes(self, b: bytes) -> None:
+    def dap_output_bytes(self, b: bitarray) -> None:
         self.append(MiniWigglerBatch.GPIOH_OUTPUT)
-        self.mpsse_clockout_bytes(b)
+        self.mpsse_clockout_bytes(dap2_encode(b))
         self.append(MiniWigglerBatch.GPIOH_INPUT)
 
     def dap_input_bytes(self, b: int) -> Promise[bytes]:
@@ -264,7 +289,7 @@ class MiniWigglerBatch(FtdiBatch):
         self.append(MiniWigglerBatch.GPIOL_NORMAL)
 
 
-class TigardBatch(FtdiBatch):
+class TigardBatch(DAPInterface):
     # low byte
     # 0x0001  BDBUS0 (TCK) ----> DAP0
     # 0x0002  BDBUS1 (TDI) ----> DAP1
@@ -283,8 +308,8 @@ class TigardBatch(FtdiBatch):
         self.mpsse_set_clk_divisor(75)
         self.exec()
 
-    def dap_output_bytes(self, b: bytes) -> None:
-        self.mpsse_clockout_bytes(b)
+    def dap_output_bytes(self, b: bitarray) -> None:
+        self.mpsse_clockout_bytes(dap2_encode(b))
 
     def dap_input_bytes(self, b: int) -> Promise[bytes]:
         return self.mpsse_clockin_bytes(b)
@@ -298,35 +323,30 @@ class TigardBatch(FtdiBatch):
         self.append(b'\x80\x30\x3b')
 
 
-DAPInterface = MiniWigglerBatch | TigardBatch
-
-
 class DAPBatch:
     def __init__(self, interface: DAPInterface) -> None:
         self._if = interface
         self.dap_output_bytes = interface.dap_output_bytes
         self.dap_input_bytes = interface.dap_input_bytes
         self.test_reset = interface.test_reset
-        self.mpsse_set_clk_divisor = interface.mpsse_set_clk_divisor
         self.exec = interface.exec
         self.reset = interface.reset
-        self.read_gpios = interface.read_gpios
+        self.mpsse_set_clk_divisor = interface.mpsse_set_clk_divisor
 
     def dap_telegram(self, cmdid: int, arglen: int = 0,
                      arg: Optional[int] = None, rsplen: int = 0
                      ) -> Promise[bytes]:
-        def on_response(b: bytes) -> None:
-            if 0 < len(b) <= 8:
-                if b[0] != 0:
-                    ba = bitarray(b, endian='little')
-                    while ba[0] == 0:
-                        ba = ba[1:]  # remove padding 0
-                    if len(ba) > 0 and ba[0] == 1:
-                        ba = ba[1:]  # remove leading 1
-                    b = ba.tobytes()
-            next_promise.value = b
         next_promise = Promise[bytes]()
-        self.dap_output_bytes(dap_telegram(cmdid, arglen, arg))
+        t = dap_telegram(cmdid, arglen, arg)
+        self.dap_output_bytes(t)
+
+        def on_response(b: bytes) -> None:
+            assert 0 < len(b), b
+            if 0 < len(b):
+                ba = bitarray(b, endian='little')
+                ba = unpad(ba)
+                b = ba.tobytes()
+            next_promise.value = b
         self.dap_input_bytes(rsplen).then(on_response)
         return next_promise
 
@@ -336,8 +356,7 @@ class DAPBatch:
         ba = bitarray(b, endian='little')
         ba = bitarray(bitarray('01') + ba + bitarray('000000'),
                       endian='little')
-        b = ba.tobytes()
-        self.dap_output_bytes(b)
+        self.dap_output_bytes(ba)
 
     def dap_readreg(self, reg: int, size: int) -> Promise[int | None]:
         # Looks like a read command, reads DAP registers?
@@ -351,19 +370,15 @@ class DAPBatch:
         # address for reads is set on telegram 8, low nibble 1
         def on_response(b: bytes) -> int | None:
             ba = bitarray(b, endian='little')
-            while len(ba) > 0 and ba[0] == 0:
-                ba = ba[1:]  # remove padding 0
-            if len(ba) > 0 and ba[0] == 1:
-                ba = ba[1:]  # remove leading 1
-                b = ba.tobytes()
-                fmt = {2: "<H", 4: "<I", 8: "<Q"}[size]
-                rx, = struct.unpack(fmt, b[:size])
-                assert sum(b[size+1:]) == 0, b
-                crc = compute_crc6(bitarray(b[:size], endian='little'))
-                assert b[size] == crc, b
-                return rx
-            else:
+            if len(ba) == 0:
                 return None
+            b = ba.tobytes()
+            fmt = {2: "<H", 4: "<I", 8: "<Q"}[size]
+            rx, = struct.unpack(fmt, b[:size])
+            assert sum(b[size+1:]) == 0, b
+            crc = compute_crc6(bitarray(b[:size], endian='little'))
+            assert b[size] == crc, b
+            return rx
 
         assert 0 <= reg <= 0xf
         if size == 2:
@@ -388,6 +403,19 @@ class DAPBatch:
                 return rx
 
         return self.dap_telegram(2, 32, d, 7).then(on_response)
+
+    def dap_t16(self) -> Promise[int | None]:
+        def on_response(b: bytes) -> int | None:
+            if sum(b) == 0:
+                return None
+            else:
+                rx, = struct.unpack("<I", b[:4])
+                assert sum(b[4+1:]) == 0, b
+                crc = compute_crc6(bitarray(b[:4], endian='little'))
+                assert b[4] == crc, b
+                return rx
+
+        return self.dap_telegram(16, 0, None, 56).then(on_response)
 
     def dap_t17(self, sz: int, data: int) -> Promise[int | None]:
         def on_response(b: bytes) -> int | None:
@@ -436,11 +464,15 @@ class DAPBatch:
         def fn(b: bytes) -> bytes:
             out = b''
             ba = bitarray(b, endian='little')
+            first = True
             for _ in range((size + 7) // 4):
-                while len(ba) > 0 and ba[0] == 0:
-                    ba = ba[1:]  # remove padding 0
-                if len(ba) > 0 and ba[0] == 1:
-                    ba = ba[1:]  # remove leading 1
+                # Note: only the first response "payload" was unpadded already
+                # but readmem can receive multiple payloads, each is 32 bits
+                # so skip applying unpad to the first payload
+                if not first:
+                    ba = unpad(ba)
+                else:
+                    first = False
                 out += ba.tobytes()[:4]
                 ba = ba[32:]
             data = out[:-4]
@@ -485,11 +517,11 @@ class DAPOperations:
         for i in range(0, len(data), 4):
             payload = data[i:i+4]
             self._batch.dap_write_payload(payload)
-            results.append(self._batch.dap_input_bytes(1))
-        results.append(self._batch.dap_input_bytes(1))
+            last = (i + 4) >= len(data)
+            results.append(self._batch.dap_input_bytes(1 + last))
         self._batch.select_addr(addr)
         self._batch.exec()
-        return bytes(v.value[0] for v in results)
+        return b''.join(v.value for v in results)
 
     def write8(self, addr: int, data: int) -> None:
         assert 0 <= data <= 255

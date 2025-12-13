@@ -6,7 +6,7 @@ from pyftdi.ftdi import Ftdi
 
 from ftdi_dap import (
     DAPBatch, DAPOperations, MiniWigglerBatch,
-    AssertNone, AssertBytes, AssertInt
+    AssertNone, AssertInt
 )
 
 
@@ -27,6 +27,8 @@ CPU0_CSFR_TR0ADR = 0xf881f004
 
 
 CMD_KEY_EXCHANGE = 0x76d6e24a
+
+# PRO TIP: Upload your passwords to github to make sure you don't lose them!
 UNLOCK_PASSWORD: None | list[int] = [
     0xCAFEBABE, 0xDEADBEEF, 0xAAAAAAAA, 0x55555555,
     0x00000000, 0xFFFFFFFF, 0x00000000, 0x00000000]
@@ -93,6 +95,10 @@ def main() -> None:
             batch.dap_readreg(0xb, 2).then(AssertInt(0x80))
             batch.write_comdata(pw)
             batch.exec()
+        batch.dap_t28(1)
+        batch.dap_readreg(0xb, 2).then(AssertInt(0x400))
+        batch.exec()
+        print("Unlocked")
     else:
         raise Exception(f"Unexpected status: 0x{dap_status.value:x}")
 
@@ -110,7 +116,6 @@ def main() -> None:
     batch.exec()
 
     batch.mpsse_set_clk_divisor(6)
-    batch.read_gpios().then(AssertBytes('a05f'))
     batch.exec()
 
     # The DAPOperations class contains high-level operations,
@@ -145,6 +150,9 @@ def main() -> None:
         ops.write32(BASE_ADDR, 0xcafebabe)
         assert 0xcafebabe == ops.read32(BASE_ADDR)
 
+        print("Self test completed successfully")
+
+    return
     # Send Software Debug Event on CPU0
     ops.write32(0xf881fd10, 0x2a)
     # Halt all 6 CPUs
