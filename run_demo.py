@@ -58,15 +58,17 @@ def main() -> None:
 
     batch.test_reset()
 
-    batch.mpsse_set_clk_divisor(42)
+    # Start slow - especially necessary when the target was just reset and/or
+    # we need to send a DAP password.
+    batch.mpsse_set_clk_freq(720_000)
     batch.reset()
     batch.exec()
 
-    batch.dap_t17(16, 0xf00).then(AssertNone())
-    batch.dap_t17(48, 0x4abbaf530400).then(AssertInt(0x400))
-    batch.dap_t28(1)
+    batch.dap_dapisc(16, 0xf00).then(AssertNone())
+    batch.dap_dapisc(48, 0x4abbaf530400).then(AssertInt(0x400))
+    batch.dap_set_io_client(1)
     batch.dap_readreg(0xb, 2).then(AssertInt(0xc0))
-    batch.dap_t8_e(0x503)
+    batch.dap_write_ojconf(0x503)
     if UNLOCK_PASSWORD is not None:
         # See "3.1.1.7.7 Debug System handling" in TC3xx User's Manual
         batch.write_comdata(CMD_KEY_EXCHANGE)
@@ -95,7 +97,7 @@ def main() -> None:
             batch.dap_readreg(0xb, 2).then(AssertInt(0x80))
             batch.write_comdata(pw)
             batch.exec()
-        batch.dap_t28(1)
+        batch.dap_set_io_client(1)
         batch.dap_readreg(0xb, 2).then(AssertInt(0x400))
         batch.exec()
         print("Unlocked")
@@ -105,17 +107,17 @@ def main() -> None:
     # DAP register 11 is some kind of status register, probably each bit has
     # some meaning, I found that 0x400 is good and 0x80 is bad but other values
     # can also appear which I didn't interpret yet
-    batch.dap_t28(1)
+    batch.dap_set_io_client(1)
     batch.dap_readreg(0xb, 2).then(AssertInt(0x400))
     batch.exec()
 
-    batch.dap_t28(1)
+    batch.dap_set_io_client(1)
     batch.dap_readreg(0xb, 2).then(AssertInt(0x400))
-    batch.dap_t8_e(0x4501)
-    batch.dap_t8_0(0xc1)
+    batch.dap_write_ojconf(0x4501)
+    batch.dap_writereg_0(0xc1)
     batch.exec()
 
-    batch.mpsse_set_clk_divisor(6)
+    batch.mpsse_set_clk_freq(5_000_000)
     batch.exec()
 
     # The DAPOperations class contains high-level operations,
@@ -152,7 +154,8 @@ def main() -> None:
 
         print("Self test completed successfully")
 
-    return
+        return
+
     # Send Software Debug Event on CPU0
     ops.write32(0xf881fd10, 0x2a)
     # Halt all 6 CPUs

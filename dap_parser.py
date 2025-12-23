@@ -1,4 +1,6 @@
-from typing import IO, Iterator, TypeVar
+from typing import IO, Iterator, TypeVar, TYPE_CHECKING
+if TYPE_CHECKING:
+    from _typeshed import SupportsWrite
 from bitarray import bitarray
 from bitarray.util import ba2int
 import struct
@@ -199,7 +201,7 @@ class DapTelegramWrite(DapTelegram):
                + (f" -> x'{self.rsp.hex()}'" if self.rsp is not None else '')
 
 
-class DapTelegram2(DapTelegram):
+class DapTelegramJtagSwapDR(DapTelegram):
     def __init__(self, x: DapTelegramData) -> None:
         assert x.cmd == 2
         assert x.arglen == 32
@@ -214,7 +216,7 @@ class DapTelegram2(DapTelegram):
             self.rx = None
 
     def __repr__(self) -> str:
-        return f"DapTelegram2({hex(self.arg)})"\
+        return f"DapTelegramJtagSwapDR({hex(self.arg)})"\
                + (f" -> {hex(self.rx)}" if self.rx is not None else '')
 
 
@@ -228,7 +230,7 @@ class DapTelegramWriteReg(DapTelegram):
                + (f" -> x'{self.rsp.hex()}'" if self.rsp is not None else '')
 
 
-class DapTelegram16(DapTelegram):
+class DapTelegramSync(DapTelegram):
     def __init__(self, x: DapTelegramData) -> None:
         assert x.cmd == 16
         assert x.arglen == 0
@@ -243,11 +245,11 @@ class DapTelegram16(DapTelegram):
             self.rx = None
 
     def __repr__(self) -> str:
-        return "DapTelegram16()"\
+        return "DapTelegramSync()"\
                + (f" -> {hex(self.rx)}" if self.rx is not None else '')
 
 
-class DapTelegram17(DapTelegram):
+class DapTelegramDAPISC(DapTelegram):
     def __init__(self, x: DapTelegramData) -> None:
         assert x.cmd == 17
         assert x.arglen == 48 or x.arglen == 16
@@ -262,13 +264,13 @@ class DapTelegram17(DapTelegram):
             self.rx = None
 
     def __repr__(self) -> str:
-        return f"DapTelegram17({hex(self.arg)})"\
+        return f"DapTelegramDAPISC({hex(self.arg)})"\
                + ((f" -> x'{self.rsp.hex()}'" if self.rx is None
                    else f" -> {hex(self.rx)}"
                    ) if self.rsp is not None else '')
 
 
-class DapTelegram19(DapTelegram):
+class DapTelegramJtagSetIR(DapTelegram):
     def __init__(self, x: DapTelegramData) -> None:
         assert x.cmd == 19
         assert x.arglen == 8
@@ -277,11 +279,11 @@ class DapTelegram19(DapTelegram):
         DapTelegram.__init__(self, x)
 
     def __repr__(self) -> str:
-        return f"DapTelegram19(0x{self.arg:02x})"\
+        return f"DapTelegramJtagSetIR(0x{self.arg:02x})"\
                + (" -> 0" if self.rsp is not None else '')
 
 
-class DapTelegram21(DapTelegram):
+class DapTelegramJtagReset(DapTelegram):
     def __init__(self, x: DapTelegramData) -> None:
         assert x.cmd == 21
         assert x.arglen == 0
@@ -290,7 +292,7 @@ class DapTelegram21(DapTelegram):
         DapTelegram.__init__(self, x)
 
     def __repr__(self) -> str:
-        return "DapTelegram21()"\
+        return "DapTelegramJtagReset()"\
                + (" -> 0" if self.rsp is not None else '')
 
 
@@ -324,14 +326,14 @@ class DapTelegramReadReg(DapTelegram):
                   ('' if self.rsp is None else f" -> x'{self.rsp.hex()}'"))
 
 
-class DapTelegram28(DapTelegram):
+class DapTelegramClientSet(DapTelegram):
     def __init__(self, x: DapTelegramData) -> None:
         assert x.cmd == 28
         assert x.arglen == 3
         DapTelegram.__init__(self, x)
 
     def __repr__(self) -> str:
-        return f"DapTelegram28({self.arg})"\
+        return f"DapTelegramClientSet({self.arg})"\
                + (f" -> x'{self.rsp.hex()}'" if self.rsp is not None else '')
 
 
@@ -375,7 +377,7 @@ def parse_dap(capture: Iterator[FtdiXfer | MpsseTransaction
                 else:
                     try:
                         if x.cmd == 2:
-                            yield DapTelegram2(x)
+                            yield DapTelegramJtagSwapDR(x)
                         elif x.cmd == 8:
                             yield DapTelegramWriteReg(x)
                         elif x.cmd == 9:
@@ -385,17 +387,17 @@ def parse_dap(capture: Iterator[FtdiXfer | MpsseTransaction
                         elif x.cmd == 10:
                             yield DapTelegramRead(x)
                         elif x.cmd == 16:
-                            yield DapTelegram16(x)
+                            yield DapTelegramSync(x)
                         elif x.cmd == 17:
-                            yield DapTelegram17(x)
+                            yield DapTelegramDAPISC(x)
                         elif x.cmd == 19:
-                            yield DapTelegram19(x)
+                            yield DapTelegramJtagSetIR(x)
                         elif x.cmd == 21:
-                            yield DapTelegram21(x)
+                            yield DapTelegramJtagReset(x)
                         elif x.cmd == 26:
                             yield DapTelegramReadReg(x)
                         elif x.cmd == 28:
-                            yield DapTelegram28(x)
+                            yield DapTelegramClientSet(x)
                         else:
                             yield DapTelegram(x)
                     except Exception:
@@ -404,7 +406,8 @@ def parse_dap(capture: Iterator[FtdiXfer | MpsseTransaction
             yield u
 
 
-def parse_and_print(pcap: IO[bytes], fd=None) -> None:
+def parse_and_print(pcap: IO[bytes], fd: 'SupportsWrite[str] | None' = None
+                    ) -> None:
     from scapy_ftdi import iterate_ftdi_usb_capture
     from mpsse_parser import (MpsseSendImmediate, parse_mpsse)
     pkts = iterate_ftdi_usb_capture(pcap)
@@ -419,7 +422,7 @@ def parse_and_print(pcap: IO[bytes], fd=None) -> None:
             print(f"        % time is {t:.6f}s %", file=fd)
 
 
-def main():
+def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Process Miniwiggler "
                                      "USBpcap file, parsing DAP high-level "

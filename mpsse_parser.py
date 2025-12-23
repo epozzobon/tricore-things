@@ -1,4 +1,6 @@
-from typing import IO, Iterator
+from typing import IO, Iterator, TYPE_CHECKING
+if TYPE_CHECKING:
+    from _typeshed import SupportsWrite
 import struct
 from scapy_ftdi import FtdiXfer
 
@@ -152,7 +154,8 @@ def parse_mpsse(fd: Iterator[FtdiXfer]) -> \
             yield u
 
 
-def parse_and_print(pcap: IO[bytes], fd=None) -> None:
+def parse_and_print(pcap: IO[bytes], fd: 'SupportsWrite[str] | None' = None
+                    ) -> None:
     from scapy_ftdi import iterate_ftdi_usb_capture
     pkts = iterate_ftdi_usb_capture(pcap)
     mpsse = parse_mpsse(pkts)
@@ -165,7 +168,7 @@ def parse_and_print(pcap: IO[bytes], fd=None) -> None:
             print(f"        % time is {t:.6f}s %", file=fd)
 
 
-def main():
+def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Process Miniwiggler"
                                      "USBpcap file, parsing DAP telegrams")

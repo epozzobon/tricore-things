@@ -1,7 +1,9 @@
-from typing import IO, Iterator
+from typing import IO, Iterator, TYPE_CHECKING
+if TYPE_CHECKING:
+    from _typeshed import SupportsWrite
 from dap_parser import MiniwigglerClkOutIn, DapPayload, DapTelegram, \
-                       DapTelegram19, DapTelegram2, DapTelegramReadReg, \
-                       DapTelegram28, DapTelegramWriteReg, DapTelegramRead, \
+                       DapTelegramReadReg, DapTelegramClientSet, \
+                       DapTelegramWriteReg, DapTelegramRead, \
                        DapTelegramWrite, parse_dap, parse_miniwiggler
 from mpsse_parser import MpsseGetGpioHigh, MpsseGetGpioLow, \
                          MpsseSendImmediate, MpsseSetGpioHigh, \
@@ -108,15 +110,6 @@ class DapOperationWriteGpio(DapOperation):
         return f"GPIO ⬅️ 0x{self.low:02x}{self.high:02x}"
 
 
-class DapOperationUnknownTelegram2(DapOperation):
-    def __init__(self, time: float, data: int):
-        DapOperation.__init__(self, time)
-        self.data = data
-
-    def __repr__(self) -> str:
-        return f"DAPcmd2 ➡️ 0x{self.data:08x}"
-
-
 def parse_dap_operations(cmds: Iterator[Cmd]) -> Iterator[Cmd | DapOperation]:
     cmdblock: list[Cmd] = []
     for u in cmds:
@@ -129,7 +122,7 @@ def parse_dap_operations(cmds: Iterator[Cmd]) -> Iterator[Cmd | DapOperation]:
                 cmd2 = cmdblock[2]
                 payloads = cmdblock[3:-2]
                 cmd4 = cmdblock[-2]
-                if (isinstance(cmd0, DapTelegram28)
+                if (isinstance(cmd0, DapTelegramClientSet)
                         and cmd0.arg == 1
                         and isinstance(cmd1, DapTelegramWriteReg)
                         and cmd1.arg == 0xc10
@@ -148,7 +141,7 @@ def parse_dap_operations(cmds: Iterator[Cmd]) -> Iterator[Cmd | DapOperation]:
                 cmd0 = cmdblock[0]
                 cmd1 = cmdblock[1]
                 cmd2 = cmdblock[2]
-                if (isinstance(cmd0, DapTelegram28)
+                if (isinstance(cmd0, DapTelegramClientSet)
                         and cmd0.arg == 1
                         and isinstance(cmd1, DapTelegramReadReg)
                         and cmd1.rx is not None
@@ -163,14 +156,14 @@ def parse_dap_operations(cmds: Iterator[Cmd]) -> Iterator[Cmd | DapOperation]:
                 cmd1 = cmdblock[1]
                 cmd2 = cmdblock[2]
                 cmd3 = cmdblock[3]
-                if (isinstance(cmd0, DapTelegram28)
+                if (isinstance(cmd0, DapTelegramClientSet)
                         and cmd0.arg == 2
                         and isinstance(cmd1, DapTelegramReadReg)
                         and cmd1.arg == 0x4b
                         and cmd1.rx is not None and cmd1.rx == 0
                         and isinstance(cmd2, DapTelegramReadReg)
                         and cmd2.rx is not None
-                        and isinstance(cmd3, DapTelegram28)
+                        and isinstance(cmd3, DapTelegramClientSet)
                         and cmd3.arg == 1):
                     yield DapOperationReadReadRegister(
                         u._raw.time, cmd2.arg_low, cmd2.rx)
@@ -181,14 +174,14 @@ def parse_dap_operations(cmds: Iterator[Cmd]) -> Iterator[Cmd | DapOperation]:
                 cmd1 = cmdblock[1]
                 cmd2 = cmdblock[2]
                 cmd3 = cmdblock[3]
-                if (isinstance(cmd0, DapTelegram28)
+                if (isinstance(cmd0, DapTelegramClientSet)
                         and cmd0.arg == 1
                         and isinstance(cmd1, DapTelegramWriteReg)
                         and cmd1.arg == 0xc10
                         and isinstance(cmd2, DapTelegramWriteReg)
                         and cmd2.arg & 0xf == 1
                         and isinstance(cmd3, DapTelegramReadReg)):
-                    
+
                     if cmd3.arg == 0x59:
                         yield DapOperationRead8(
                             u._raw.time, cmd2.arg >> 4, cmd3.rx)
@@ -202,7 +195,7 @@ def parse_dap_operations(cmds: Iterator[Cmd]) -> Iterator[Cmd | DapOperation]:
                 cmd0 = cmdblock[0]
                 cmd1 = cmdblock[1]
                 cmd2 = cmdblock[2]
-                if (isinstance(cmd0, DapTelegram28)
+                if (isinstance(cmd0, DapTelegramClientSet)
                         and cmd0.arg == 1
                         and isinstance(cmd1, DapTelegramWriteReg)
                         and cmd1.arg == 0xc10
@@ -218,7 +211,7 @@ def parse_dap_operations(cmds: Iterator[Cmd]) -> Iterator[Cmd | DapOperation]:
                 cmd2 = cmdblock[2]
                 cmd3 = cmdblock[3]
                 cmd4 = cmdblock[4]
-                if (isinstance(cmd0, DapTelegram28)
+                if (isinstance(cmd0, DapTelegramClientSet)
                         and cmd0.arg == 1
                         and isinstance(cmd1, DapTelegramWriteReg)
                         and cmd1.arg == 0xc10
@@ -228,7 +221,7 @@ def parse_dap_operations(cmds: Iterator[Cmd]) -> Iterator[Cmd | DapOperation]:
                         and isinstance(cmd2, MpsseSetTckDivisor)
                         and isinstance(cmd4, MpsseSetTckDivisor)):
                     yield DapOperationReadMemory(
-                        u._raw.time, cmd3.read_addr, cmd3.data)
+                        u._raw.time, cmd3.read_addr, cmd3.data, cmd3.crcgood)
                     done = True
 
             if not done and len(cmdblock) == 3:
@@ -249,26 +242,14 @@ def parse_dap_operations(cmds: Iterator[Cmd]) -> Iterator[Cmd | DapOperation]:
                         u._raw.time, cmd1.values, cmd0.values)
                     done = True
 
-            if not done and len(cmdblock) == 3:
-                cmd0 = cmdblock[0]
-                cmd1 = cmdblock[1]
-                if (isinstance(cmd0, DapTelegram19)
-                        and cmd0.arg == 4
-                        and cmd0.rsp is not None
-                        and isinstance(cmd1, DapTelegram2)
-                        and cmd1.arg == 0
-                        and cmd1.rx is not None):
-                    yield DapOperationUnknownTelegram2(
-                        u._raw.time, cmd1.rx)
-                    done = True
-
             if not done:
                 for cmd in cmdblock:
                     yield cmd
             cmdblock = []
 
 
-def parse_and_print(pcap: IO[bytes], fd=None) -> None:
+def parse_and_print(pcap: IO[bytes], fd: 'SupportsWrite[str] | None' = None
+                    ) -> None:
     pkts = iterate_ftdi_usb_capture(pcap)
     mpsse = parse_mpsse(pkts)
     cmds = parse_dap(parse_miniwiggler(mpsse))
@@ -284,7 +265,7 @@ def parse_and_print(pcap: IO[bytes], fd=None) -> None:
             print(u, file=fd)
 
 
-def main():
+def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Process Miniwiggler"
                                      "USBpcap file, parsing DAP telegrams")

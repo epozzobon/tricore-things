@@ -1,6 +1,6 @@
-from typing import IO, Callable, Iterator
+from typing import IO, Any, Callable, Iterator, Type
 from multiprocessing import Process, Queue
-from scapy.all import bind_layers, Packet, Raw, sniff, EDecimal
+from scapy.all import bind_layers, Packet, Raw, sniff
 from scapy.fields import (PacketListField, LEShortField, ByteField,
                           XStrFixedLenField)
 from scapy.layers.usb import USBpcap
@@ -12,7 +12,9 @@ class FTDI_FT_TX_Command(Packet):
     fields_desc = [ByteField("command", default=0)]
 
     @classmethod
-    def dispatch_hook(cls, _pkt=None, *args, **kargs):
+    def dispatch_hook(cls, _pkt: bytes, *args: Any,
+                      **kargs: Any) -> 'Type[Packet]':
+        assert isinstance(_pkt, bytes) and len(_pkt) > 0
         if _pkt[0] == 0x19:
             return FTDI_ClockDataBytesOutOnNVeClockEdgeLSBFirstNoRead
         if _pkt[0] == 0x1b:
@@ -53,10 +55,10 @@ class FTDI_FT_TX_Command(Packet):
 
 
 class FTDI_FT_TX_Command_P(Packet):
-    def extract_padding(self, s):
+    def extract_padding(self, s: bytes) -> tuple[bytes, bytes]:
         return b"", s
 
-    def expected_response_size(self):
+    def expected_response_size(self) -> int:
         return 0
 
 
@@ -78,7 +80,8 @@ class FTDI_ClockDataBytesInOnPVeClockEdgeLSBFirstNoWrite(FTDI_FT_TX_Command_P):
     fields_desc = [ByteField("command", default=0),
                    LEShortField("length", default=0x00)]
 
-    def expected_response_size(self):
+    def expected_response_size(self) -> int:
+        assert isinstance(self.length, int)
         return self.length+1
 
 
@@ -91,7 +94,7 @@ class FTDI_SetDataBitsLowByte(FTDI_FT_TX_Command_P):
 class FTDI_GetDataBitsLowByte(FTDI_FT_TX_Command_P):
     fields_desc = [ByteField("command", default=0)]
 
-    def expected_response_size(self):
+    def expected_response_size(self) -> int:
         return 1
 
 
@@ -104,7 +107,7 @@ class FTDI_SetDataBitsHighByte(FTDI_FT_TX_Command_P):
 class FTDI_GetDataBitsHighByte(FTDI_FT_TX_Command_P):
     fields_desc = [ByteField("command", default=0)]
 
-    def expected_response_size(self):
+    def expected_response_size(self) -> int:
         return 1
 
 
@@ -148,14 +151,14 @@ class FTDI_DisableClockAdaptive(FTDI_FT_TX_Command_P):
 class FTDI_AA(FTDI_FT_TX_Command_P):
     fields_desc = [ByteField("command", default=0)]
 
-    def expected_response_size(self):
+    def expected_response_size(self) -> int:
         return 2
 
 
 class FTDI_AB(FTDI_FT_TX_Command_P):
     fields_desc = [ByteField("command", default=0)]
 
-    def expected_response_size(self):
+    def expected_response_size(self) -> int:
         return 2
 
 
@@ -163,7 +166,7 @@ class FTDI_FT_TX_Payload(Packet):
     fields_desc = [PacketListField("commands", [],
                                    FTDI_FT_TX_Command, max_count=1 << 16)]
 
-    def extract_padding(self, s):
+    def extract_padding(self, s: bytes) -> tuple[bytes, bytes]:
         return s, b""
 
 
@@ -174,7 +177,7 @@ class FTDI_FT_RX_Payload(Packet):
     fields_desc = [ByteField("modem_status", default=0x00),
                    ByteField("line_status", default=0x00)]
 
-    def extract_padding(self, s):
+    def extract_padding(self, s: bytes) -> tuple[bytes, bytes]:
         return s, b""
 
 
@@ -204,7 +207,7 @@ class OnPkt:
         self.active_reqs: list[tuple[USBpcap, FTDI_FT_TX_Command, int]] = []
         self.remainder = b''
         self.on_exchange = on_exchange
-        self.start_time: None | float | EDecimal = None
+        self.start_time: Any = None
 
     def on_pkt(self, p: USBpcap) -> None:
         if self.start_time is None:

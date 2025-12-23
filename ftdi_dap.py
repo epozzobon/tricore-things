@@ -78,6 +78,15 @@ def AssertNone() -> Callable[[Any], None]:
     return curry
 
 
+def AssertNotNone() -> Callable[[T | None], T]:
+    def curry(b: T | None) -> T:
+        if b is None:
+            raise AssertionError.with_traceback(AssertionError(), tb)
+        return b
+    tb = traceback()
+    return curry
+
+
 def AssertBytes(x: str) -> Callable[[bytes], None]:
     def curry(b: bytes) -> None:
         if b != bytes.fromhex(x):
@@ -265,7 +274,6 @@ class MiniWigglerBatch(DAPInterface):
         self.append(b'\x8a\x97\x8d')
 
         self.test_reset()
-        self.mpsse_set_clk_divisor(75)
         self.read_gpios().then(AssertBytes('a01f'))
         self.append(MiniWigglerBatch.GPIOH_INPUT)
         self.append(MiniWigglerBatch.GPIOL_NORMAL)
@@ -305,7 +313,6 @@ class TigardBatch(DAPInterface):
         self.append(b'\x8a\x97\x8d')  # clocking things
         self.append(b'\x80\x30\x3b')
         self.test_reset()
-        self.mpsse_set_clk_divisor(75)
         self.exec()
 
     def dap_output_bytes(self, b: bitarray) -> None:
@@ -332,6 +339,20 @@ class DAPBatch:
         self.exec = interface.exec
         self.reset = interface.reset
         self.mpsse_set_clk_divisor = interface.mpsse_set_clk_divisor
+
+    def mpsse_set_clk_freq(self, freq: int, base: int = 30_000_000) -> None:
+        # NOTE: base frequency is either 6MHz or 30MHz depending whether
+        # commands 0x8a or 0x8b were issued, and whether we are using ft2232H
+        # or ft2232D. Here I'm assuming base_freq is 30MHz for now.
+
+        assert freq > 0
+        div = round(base / freq)
+        if div < 1 or div > 0x10000:
+            raise ValueError(f"Selected frequency ({freq}) is out of range")
+        error = abs((base / div) - freq) / freq
+        if error > 0.05:
+            raise ValueError(f"Selected frequency ({freq}) is unreachable")
+        return self.mpsse_set_clk_divisor(div)
 
     def dap_telegram(self, cmdid: int, arglen: int = 0,
                      arg: Optional[int] = None, rsplen: int = 0
@@ -373,8 +394,11 @@ class DAPBatch:
             if len(ba) == 0:
                 return None
             b = ba.tobytes()
+            if len(b) < size + 1:  # +1 for crc
+                raise Exception(f"Response too short: {b.hex()}")
             fmt = {2: "<H", 4: "<I", 8: "<Q"}[size]
             rx, = struct.unpack(fmt, b[:size])
+            assert isinstance(rx, int)
             assert sum(b[size+1:]) == 0, b
             crc = compute_crc6(bitarray(b[:size], endian='little'))
             assert b[size] == crc, b
@@ -391,12 +415,13 @@ class DAPBatch:
             raise NotImplementedError(f"Unknown size {size}")
         return self.dap_telegram(26, 7, reg, 9).then(on_response)
 
-    def dap_t2(self, d: int) -> Promise[int | None]:
+    def dap_jtag_swap_dr(self, d: int) -> Promise[int | None]:
         def on_response(b: bytes) -> int | None:
             if sum(b) == 0:
                 return None
             else:
                 rx, = struct.unpack("<I", b[:4])
+                assert isinstance(rx, int)
                 assert sum(b[4+1:]) == 0, b
                 crc = compute_crc6(bitarray(b[:4], endian='little'))
                 assert b[4] == crc, b
@@ -404,12 +429,13 @@ class DAPBatch:
 
         return self.dap_telegram(2, 32, d, 7).then(on_response)
 
-    def dap_t16(self) -> Promise[int | None]:
+    def dap_sync(self) -> Promise[int | None]:
         def on_response(b: bytes) -> int | None:
             if sum(b) == 0:
                 return None
             else:
                 rx, = struct.unpack("<I", b[:4])
+                assert isinstance(rx, int)
                 assert sum(b[4+1:]) == 0, b
                 crc = compute_crc6(bitarray(b[:4], endian='little'))
                 assert b[4] == crc, b
@@ -417,12 +443,13 @@ class DAPBatch:
 
         return self.dap_telegram(16, 0, None, 56).then(on_response)
 
-    def dap_t17(self, sz: int, data: int) -> Promise[int | None]:
+    def dap_dapisc(self, sz: int, data: int) -> Promise[int | None]:
         def on_response(b: bytes) -> int | None:
             if sum(b) == 0:
                 return None
             else:
                 rx, = struct.unpack("<H", b[:2])
+                assert isinstance(rx, int)
                 assert sum(b[2+1:]) == 0, b
                 crc = compute_crc6(bitarray(b[:2], endian='little'))
                 assert b[2] == crc, b
@@ -430,10 +457,10 @@ class DAPBatch:
 
         return self.dap_telegram(17, sz, data, 5).then(on_response)
 
-    def dap_t19(self) -> None:
+    def dap_jtag_set_ir(self) -> None:
         self.dap_telegram(19, 8, 4, 3).then(AssertBytes('000002'))
 
-    def dap_t28(self, x: int) -> None:
+    def dap_set_io_client(self, x: int) -> None:
         self.dap_telegram(28, 3, x, 3).then(AssertZero())
 
     def dap_writereg(self, reg: int, data: int, size: int, rspsize: int = 7
@@ -441,8 +468,11 @@ class DAPBatch:
         self.dap_telegram(8, size+4, data << 4 | reg, rspsize
                           ).then(AssertZero())
 
-    def dap_t8_0(self, x: int) -> None:
+    def dap_writereg_0(self, x: int) -> None:
         self.dap_writereg(0, x, 12)
+
+    def dap_read_ioinfo(self) -> Promise[int]:
+        return self.dap_readreg(0xb, 2).then(AssertNotNone())
 
     def select_addr(self, addr: int) -> None:
         self.dap_writereg(1, addr, 32)
@@ -450,7 +480,7 @@ class DAPBatch:
     def write_comdata(self, x: int) -> None:
         self.dap_writereg(4, x, 32)
 
-    def dap_t8_e(self, x: int) -> None:
+    def dap_write_ojconf(self, x: int) -> None:
         self.dap_writereg(0xe, x, 16)
 
     def dap_writemem(self, addr: int, size: int) -> None:
@@ -502,18 +532,18 @@ class DAPOperations:
 
     def read(self, addr: int, size: int) -> bytes:
         # Read a block of bytes, must be aligned to 32-bit
-        self._batch.dap_t28(1)
-        self._batch.dap_t8_0(0xc1)
+        self._batch.dap_set_io_client(1)
+        self._batch.dap_writereg_0(0xc1)
         res = self._batch.dap_readmem(addr, size)
         self._batch.exec()
         return res.value
 
     def write(self, addr: int, data: bytes) -> bytes:
         # Write a block of bytes, must be aligned to 32-bit
-        self._batch.dap_t28(1)
-        self._batch.dap_t8_0(0xc1)
+        self._batch.dap_set_io_client(1)
+        self._batch.dap_writereg_0(0xc1)
         self._batch.dap_writemem(addr, len(data))
-        results: list[Promise] = []
+        results: list[Promise[bytes]] = []
         for i in range(0, len(data), 4):
             payload = data[i:i+4]
             self._batch.dap_write_payload(payload)
@@ -525,15 +555,15 @@ class DAPOperations:
 
     def write8(self, addr: int, data: int) -> None:
         assert 0 <= data <= 255
-        self._batch.dap_t28(1)
-        self._batch.dap_t8_0(0xc1)
+        self._batch.dap_set_io_client(1)
+        self._batch.dap_writereg_0(0xc1)
         self._batch.select_addr(addr)
         self._batch.dap_writereg(8, data, 8)
         self._batch.exec()
 
     def read8(self, addr: int) -> int:
-        self._batch.dap_t28(1)
-        self._batch.dap_t8_0(0xc1)
+        self._batch.dap_set_io_client(1)
+        self._batch.dap_writereg_0(0xc1)
         self._batch.select_addr(addr)
         res = self._batch.dap_readreg(9, 4)
         self._batch.exec()
@@ -546,15 +576,15 @@ class DAPOperations:
 
     def write16(self, addr: int, data: int) -> None:
         assert 0 <= data <= 0xffff
-        self._batch.dap_t28(1)
-        self._batch.dap_t8_0(0xc1)
+        self._batch.dap_set_io_client(1)
+        self._batch.dap_writereg_0(0xc1)
         self._batch.select_addr(addr)
         self._batch.dap_writereg(6, data, 16)
         self._batch.exec()
 
     def read16(self, addr: int) -> int:
-        self._batch.dap_t28(1)
-        self._batch.dap_t8_0(0xc1)
+        self._batch.dap_set_io_client(1)
+        self._batch.dap_writereg_0(0xc1)
         self._batch.select_addr(addr)
         res = self._batch.dap_readreg(7, 4)
         self._batch.exec()
@@ -566,15 +596,15 @@ class DAPOperations:
 
     def write32(self, addr: int, data: int) -> None:
         assert 0 <= data <= 0xffffffff
-        self._batch.dap_t28(1)
-        self._batch.dap_t8_0(0xc1)
+        self._batch.dap_set_io_client(1)
+        self._batch.dap_writereg_0(0xc1)
         self._batch.select_addr(addr)
         self._batch.dap_writereg(4, data, 32)
         self._batch.exec()
 
     def read32(self, addr: int) -> int:
-        self._batch.dap_t28(1)
-        self._batch.dap_t8_0(0xc1)
+        self._batch.dap_set_io_client(1)
+        self._batch.dap_writereg_0(0xc1)
         self._batch.select_addr(addr)
         res = self._batch.dap_readreg(5, 4)
         self._batch.exec()
