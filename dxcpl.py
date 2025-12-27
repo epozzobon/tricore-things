@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import time
 import pyftdi
 from pyftdi.ftdi import Ftdi
 from bitarray import bitarray
@@ -139,8 +140,19 @@ if __name__ == '__main__':
     # Unlocking over DXCPL is tricky, I think I'm doing it with HARR here?
     # see https://documentation.infineon.com/aurixtc3xx/docs/fhj1710260288543
     # Regardless, it works on my locked TC297 application kit
-    dap.reset()
-    dxcpl.activate(1070)
+
+    # mosfet mode
+    #dap.reset()
+
+    # turn off + sleep
+    dxcpl.set_gpios(0x0a)
+    dxcpl.exec()
+    time.sleep(1)
+
+    # turn on
+    dxcpl.set_gpios(0x2a)
+
+    dxcpl.activate(2000)
     dap.dap_dapisc(16, 0xf00).then(AssertNone())
     dap.dap_dapisc(48, 0x4abbaf530400).then(AssertInt(0x400))
     dap.dap_set_io_client(1)
