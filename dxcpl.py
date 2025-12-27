@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import time
 import pyftdi
 from pyftdi.ftdi import Ftdi
 from bitarray import bitarray
@@ -26,8 +27,8 @@ class TigardDxcplBatch(DAPInterface):
         self.append(b'\x8a\x97\x8d')
         # Outputs to 0x2A, so TDI, TMS and SRTS are high
         # (DXCPL expects TRST to be LOW)
-        self.set_gpios(0x0a)
-        self.set_gpios(0x2a)
+        #self.set_gpios(0x0a)
+        #self.set_gpios(0x1a)
         self.mpsse_set_clk_divisor(7)
         self.exec()
 
@@ -52,8 +53,11 @@ class TigardDxcplBatch(DAPInterface):
         self.exec()
 
     def reset(self) -> None:
-        self.set_gpios(0x0a)
-        self.set_gpios(0x2a)
+        # Power cycle: turn off, wait, turn on
+        self.set_gpios(0x0a)  # MOSFET off (bit 4 low)
+        self.exec()
+        time.sleep(2.0)  # Wait for caps to discharge
+        self.set_gpios(0x1a)  # MOSFET on (bit 4 high)
         self.exec()
 
     def dap_output_bytes(self, b: bitarray) -> None:
@@ -118,7 +122,7 @@ if __name__ == '__main__':
     for vendor, product, interface in [
             (0x403, 0x6010, 2),  # Tigard
             (0x403, 0x6014, 1)   # Generic FT232H breakout board
-            ]:
+        ]:
         try:
             ftdi.open_mpsse(vendor, product, interface=interface)
         except OSError:
@@ -140,7 +144,10 @@ if __name__ == '__main__':
     # see https://documentation.infineon.com/aurixtc3xx/docs/fhj1710260288543
     # Regardless, it works on my locked TC297 application kit
     dap.reset()
-    dxcpl.activate(1070)
+    dap.set_gpios(0x0a)
+    dap.exec()
+    time.sleep(1)
+    dxcpl.activate(2000)
     dap.dap_dapisc(16, 0xf00).then(AssertNone())
     dap.dap_dapisc(48, 0x4abbaf530400).then(AssertInt(0x400))
     dap.dap_set_io_client(1)
