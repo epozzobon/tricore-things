@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import time
 import pyftdi
 from pyftdi.ftdi import Ftdi
 from bitarray import bitarray
@@ -139,8 +140,20 @@ if __name__ == '__main__':
     # Unlocking over DXCPL is tricky, I think I'm doing it with HARR here?
     # see https://documentation.infineon.com/aurixtc3xx/docs/fhj1710260288543
     # Regardless, it works on my locked TC297 application kit
-    dap.reset()
-    dxcpl.activate(1070)
+
+    # mosfet mode
+    #dap.reset()
+
+    # turn off + sleep
+    dxcpl.set_gpios(0x0a)
+    dxcpl.exec()
+    time.sleep(2)
+
+    # turn on
+    dxcpl.set_gpios(0x2a)
+
+    dxcpl.activate(1024 * 60)
+
     dap.dap_dapisc(16, 0xf00).then(AssertNone())
     dap.dap_dapisc(48, 0x4abbaf530400).then(AssertInt(0x400))
     dap.dap_set_io_client(1)
@@ -151,6 +164,7 @@ if __name__ == '__main__':
     dap.dap_read_ioinfo().then(lambda x: print(f"IOINFO: 0x{x:x}"))
     dap.dap_read_ioinfo().then(lambda x: print(f"IOINFO: 0x{x:x}"))
     dap.dap_read_ioinfo().then(lambda x: print(f"IOINFO: 0x{x:x}"))
+    
     dap.write_comdata(CMD_KEY_EXCHANGE)
     for pw in UNLOCK_PASSWORD:
         v11_1 = dap.dap_read_ioinfo().then(lambda x: print(f"IOINFO: 0x{x:x}"))
@@ -158,7 +172,7 @@ if __name__ == '__main__':
     dap.exec()
 
     ops = DAPOperations(dap)
-    print(f"SBU_ID      = 0x{ops.read32(0xf0036008):08x}")
+    print(f"SBU_ID      = 0x{ops.read32(0xf0036008):08x}") # fails if not unlocked successfully
     print(f"SBU_MANID   = 0x{ops.read32(0xf0036144):08x}")
     print(f"SBU_CHIPID  = 0x{ops.read32(0xf0036140):08x}")
     print(f"CBS_OEC     = 0x{ops.read32(0xf0000478):08x}")
